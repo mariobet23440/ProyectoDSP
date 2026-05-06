@@ -1,0 +1,55 @@
+PROCESAMIENTO DE SEÑALES - PROYECTO FINAL DE CURSO
+PSEUDOCÓDIGO DE TARJETA NUCLEO
+DESARROLLADO POR: Mario Alejandro Betancourt Franco (23440)
+
+1. Calcular salida de filtro digital -----------------------------------------------
+Entradas: - Vector de historial de entradas x_h (Incluyendo la entrada actual)
+          - Vector de historial de salidas  y_h (Excluyendo la salida actual)
+          - Vector de coeficientes de numerador a
+          - Vector de coeficientes de denominador b
+
+Salidas: El valor actual de y
+
+Proceso: 
+    1. Definir una variable y_acc -> 0
+
+    2. Insertar x (variable global con la entrada actual) en x_h,
+       Eliminando el último elemento de x_h.
+
+    2. Por cada coeficiente en a (Desde el índice 0 hasta N)
+        y_acc <- y_acc + a[i] * x_h[i]
+    
+    3. Por cada coeficiente en b (Desde el índice 0 hasta M)
+        y_acc <- y_acc + b[i] * y_h[i]
+
+    4. Insertar y_acc al inicio de y_h y desplazar el resto de
+       componentes (Eliminando el último)
+
+Consideraciones: Los vectores x_h, y_h, a, b deben tener el mismo 
+                 tamaño.
+
+------------------------------------------------------------------------------------------------------
+PROTOCOLO DE TRANSMISIÓN DE NÚMEROS POR USART
+Dado que por cada transmisión se envían 4 bytes (Todos con información en números), se necesita
+de un protocolo de comunicaciones multi-byte para que el procesador reconozca la separación entre 
+un float y otro (u otra señal). Se requiere de, por lo menos, un byte para esto.
+
+Todo esto es lo que ocurrirá en el transmisor, cada vez que quiera editarse un índice de a o b
+1. Se envia una señal de inicio                                             -> START
+2. Se escoge qué vector se quiere editar (a o b)                            -> VECTOR_SEL
+3. Se escoge qué índice se quiere editar (0 a 255)                          -> INDEX                
+4. Se envía una señal para indicar que se envía el primer byte              -> DATA_0
+5. Se envía el primer byte de datos (El receptor lo guarda en su buffer)
+6. Se envía una señal para indicar que se envía el segundo byte             -> DATA_1
+7. Se envía el segundo byte de datos (El receptor lo guarda en su buffer)
+8. Se envía una señal para indicar que se envía el tercer byte              -> DATA_2
+9. Se envía el tercer byte de datos (El receptor lo guarda en su buffer)
+10. Se envía una señal para indicar que se envía el cuarto byte             -> DATA_3
+11. Se envía el cuarto byte de datos (El receptor lo guarda en su buffer)
+12. Se envía un byte de parada                                              -> STOP
+
+Se mantiene la convención de que el byte 0 es el menos significativo y el
+byte 3 es el más significativo. Se envía primero el byte 0 y de último el byte 3
+
+En transmisor (computadora) -> Enviar un número float en 4 bytes.
+
