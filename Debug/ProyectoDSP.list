@@ -35,15 +35,15 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  15 .debug_rnglists 00000c93  00000000  00000000  0001ff78  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 16 .debug_line   0000e5f6  00000000  00000000  00020c0b  2**0
+ 16 .debug_line   0000e5f7  00000000  00000000  00020c0b  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_str    00004e60  00000000  00000000  0002f201  2**0
+ 17 .debug_str    00004e60  00000000  00000000  0002f202  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .comment      00000043  00000000  00000000  00034061  2**0
+ 18 .comment      00000043  00000000  00000000  00034062  2**0
                   CONTENTS, READONLY
- 19 .debug_frame  00005278  00000000  00000000  000340a4  2**2
+ 19 .debug_frame  00005278  00000000  00000000  000340a8  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 20 .debug_line_str 00000060  00000000  00000000  0003931c  2**0
+ 20 .debug_line_str 00000060  00000000  00000000  00039320  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -1941,61 +1941,60 @@ int main(void)
  8001412:	2200      	movs	r2, #0
  8001414:	701a      	strb	r2, [r3, #0]
 
-		uint16_t x = (uint16_t)adc_raw_value * (4095/255);
+		float x = (float)adc_raw_value;
  8001416:	4b22      	ldr	r3, [pc, #136]	@ (80014a0 <main+0xe8>)
- 8001418:	781b      	ldrb	r3, [r3, #0]
- 800141a:	b2db      	uxtb	r3, r3
- 800141c:	011b      	lsls	r3, r3, #4
- 800141e:	817b      	strh	r3, [r7, #10]
-		float y_out = DigitalFilter((float)x, &cb_x, &cb_y, a_coefs, b_coefs);
- 8001420:	897b      	ldrh	r3, [r7, #10]
- 8001422:	ee07 3a90 	vmov	s15, r3
- 8001426:	eef8 7a67 	vcvt.f32.u32	s15, s15
- 800142a:	4b1e      	ldr	r3, [pc, #120]	@ (80014a4 <main+0xec>)
- 800142c:	4a1e      	ldr	r2, [pc, #120]	@ (80014a8 <main+0xf0>)
- 800142e:	491f      	ldr	r1, [pc, #124]	@ (80014ac <main+0xf4>)
- 8001430:	481f      	ldr	r0, [pc, #124]	@ (80014b0 <main+0xf8>)
- 8001432:	eeb0 0a67 	vmov.f32	s0, s15
- 8001436:	f7ff fddb 	bl	8000ff0 <DigitalFilter>
- 800143a:	ed87 0a01 	vstr	s0, [r7, #4]
+ 8001418:	881b      	ldrh	r3, [r3, #0]
+ 800141a:	b29b      	uxth	r3, r3
+ 800141c:	ee07 3a90 	vmov	s15, r3
+ 8001420:	eef8 7a67 	vcvt.f32.u32	s15, s15
+ 8001424:	edc7 7a02 	vstr	s15, [r7, #8]
+		float y_out = DigitalFilter(x, &cb_x, &cb_y, a_coefs, b_coefs);
+ 8001428:	4b1e      	ldr	r3, [pc, #120]	@ (80014a4 <main+0xec>)
+ 800142a:	4a1f      	ldr	r2, [pc, #124]	@ (80014a8 <main+0xf0>)
+ 800142c:	491f      	ldr	r1, [pc, #124]	@ (80014ac <main+0xf4>)
+ 800142e:	4820      	ldr	r0, [pc, #128]	@ (80014b0 <main+0xf8>)
+ 8001430:	ed97 0a02 	vldr	s0, [r7, #8]
+ 8001434:	f7ff fddc 	bl	8000ff0 <DigitalFilter>
+ 8001438:	ed87 0a01 	vstr	s0, [r7, #4]
 
 		int32_t dac_val = (int32_t)y_out;
- 800143e:	edd7 7a01 	vldr	s15, [r7, #4]
- 8001442:	eefd 7ae7 	vcvt.s32.f32	s15, s15
- 8001446:	ee17 3a90 	vmov	r3, s15
- 800144a:	60fb      	str	r3, [r7, #12]
+ 800143c:	edd7 7a01 	vldr	s15, [r7, #4]
+ 8001440:	eefd 7ae7 	vcvt.s32.f32	s15, s15
+ 8001444:	ee17 3a90 	vmov	r3, s15
+ 8001448:	60fb      	str	r3, [r7, #12]
 		if(dac_val > 4095) dac_val = 4095;
- 800144c:	68fb      	ldr	r3, [r7, #12]
- 800144e:	f5b3 5f80 	cmp.w	r3, #4096	@ 0x1000
- 8001452:	db02      	blt.n	800145a <main+0xa2>
- 8001454:	f640 73ff 	movw	r3, #4095	@ 0xfff
- 8001458:	60fb      	str	r3, [r7, #12]
+ 800144a:	68fb      	ldr	r3, [r7, #12]
+ 800144c:	f5b3 5f80 	cmp.w	r3, #4096	@ 0x1000
+ 8001450:	db02      	blt.n	8001458 <main+0xa0>
+ 8001452:	f640 73ff 	movw	r3, #4095	@ 0xfff
+ 8001456:	60fb      	str	r3, [r7, #12]
 		if(dac_val < 0)    dac_val = 0;
- 800145a:	68fb      	ldr	r3, [r7, #12]
- 800145c:	2b00      	cmp	r3, #0
- 800145e:	da01      	bge.n	8001464 <main+0xac>
- 8001460:	2300      	movs	r3, #0
- 8001462:	60fb      	str	r3, [r7, #12]
+ 8001458:	68fb      	ldr	r3, [r7, #12]
+ 800145a:	2b00      	cmp	r3, #0
+ 800145c:	da01      	bge.n	8001462 <main+0xaa>
+ 800145e:	2300      	movs	r3, #0
+ 8001460:	60fb      	str	r3, [r7, #12]
 
 		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)dac_val);
- 8001464:	68fb      	ldr	r3, [r7, #12]
- 8001466:	2200      	movs	r2, #0
- 8001468:	2100      	movs	r1, #0
- 800146a:	4808      	ldr	r0, [pc, #32]	@ (800148c <main+0xd4>)
- 800146c:	f001 fbda 	bl	8002c24 <HAL_DAC_SetValue>
+ 8001462:	68fb      	ldr	r3, [r7, #12]
+ 8001464:	2200      	movs	r2, #0
+ 8001466:	2100      	movs	r1, #0
+ 8001468:	4808      	ldr	r0, [pc, #32]	@ (800148c <main+0xd4>)
+ 800146a:	f001 fbdb 	bl	8002c24 <HAL_DAC_SetValue>
 
 		// SOLO ENVIAR SI NO ESTAMOS EN MODO CONFIGURACIÓN
 		if (config_mode == 0) {
- 8001470:	4b10      	ldr	r3, [pc, #64]	@ (80014b4 <main+0xfc>)
- 8001472:	781b      	ldrb	r3, [r3, #0]
- 8001474:	b2db      	uxtb	r3, r3
- 8001476:	2b00      	cmp	r3, #0
- 8001478:	d1c5      	bne.n	8001406 <main+0x4e>
+ 800146e:	4b11      	ldr	r3, [pc, #68]	@ (80014b4 <main+0xfc>)
+ 8001470:	781b      	ldrb	r3, [r3, #0]
+ 8001472:	b2db      	uxtb	r3, r3
+ 8001474:	2b00      	cmp	r3, #0
+ 8001476:	d1c6      	bne.n	8001406 <main+0x4e>
 			UART_SendBinaryFloat(y_out);
- 800147a:	ed97 0a01 	vldr	s0, [r7, #4]
- 800147e:	f7ff ff7f 	bl	8001380 <UART_SendBinaryFloat>
+ 8001478:	ed97 0a01 	vldr	s0, [r7, #4]
+ 800147c:	f7ff ff80 	bl	8001380 <UART_SendBinaryFloat>
 	if(adc_ready)
- 8001482:	e7c0      	b.n	8001406 <main+0x4e>
+ 8001480:	e7c1      	b.n	8001406 <main+0x4e>
+ 8001482:	bf00      	nop
  8001484:	200002e0 	.word	0x200002e0
  8001488:	20000224 	.word	0x20000224
  800148c:	2000026c 	.word	0x2000026c
@@ -2003,7 +2002,7 @@ int main(void)
  8001494:	200003ec 	.word	0x200003ec
  8001498:	20000328 	.word	0x20000328
  800149c:	200003d0 	.word	0x200003d0
- 80014a0:	200003d1 	.word	0x200003d1
+ 80014a0:	200003d2 	.word	0x200003d2
  80014a4:	2000001c 	.word	0x2000001c
  80014a8:	20000010 	.word	0x20000010
  80014ac:	20000008 	.word	0x20000008
@@ -2722,13 +2721,13 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
  80018b4:	4a08      	ldr	r2, [pc, #32]	@ (80018d8 <HAL_ADC_ConvCpltCallback+0x30>)
  80018b6:	4293      	cmp	r3, r2
  80018b8:	d109      	bne.n	80018ce <HAL_ADC_ConvCpltCallback+0x26>
-        adc_raw_value = (uint8_t)HAL_ADC_GetValue(hadc); // Correcto: asignación directa
+        adc_raw_value = (uint16_t)HAL_ADC_GetValue(hadc); // Correcto: asignación directa
  80018ba:	6878      	ldr	r0, [r7, #4]
  80018bc:	f000 fdce 	bl	800245c <HAL_ADC_GetValue>
  80018c0:	4603      	mov	r3, r0
- 80018c2:	b2da      	uxtb	r2, r3
+ 80018c2:	b29a      	uxth	r2, r3
  80018c4:	4b05      	ldr	r3, [pc, #20]	@ (80018dc <HAL_ADC_ConvCpltCallback+0x34>)
- 80018c6:	701a      	strb	r2, [r3, #0]
+ 80018c6:	801a      	strh	r2, [r3, #0]
         adc_ready = 1;
  80018c8:	4b05      	ldr	r3, [pc, #20]	@ (80018e0 <HAL_ADC_ConvCpltCallback+0x38>)
  80018ca:	2201      	movs	r2, #1
@@ -2741,7 +2740,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
  80018d4:	bd80      	pop	{r7, pc}
  80018d6:	bf00      	nop
  80018d8:	40012000 	.word	0x40012000
- 80018dc:	200003d1 	.word	0x200003d1
+ 80018dc:	200003d2 	.word	0x200003d2
  80018e0:	200003d0 	.word	0x200003d0
 
 080018e4 <HAL_UART_RxCpltCallback>:

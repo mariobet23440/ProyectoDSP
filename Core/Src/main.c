@@ -92,7 +92,7 @@ DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t adc_ready = 0;
-volatile uint8_t adc_raw_value = 0; // Cambiado de puntero a variable real
+volatile uint16_t adc_raw_value = 0; // Cambiado de puntero a variable real
 
 // Buffers físicos
 float x_data[3] = {0};
@@ -277,29 +277,6 @@ void ProcessInputUART(float* a, float* b, uint8_t input[])
 }
 /* USER CODE END 0 */
 
-// Conversión de 4 bytes a float
-float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0)
-{
-	float f;
-	uint8_t b[] = {b3, b2, b1, b0};
-	memcpy(&f, &b, sizeof(f));
-	return f;
-}
-
-// Enviar float a través de USART
-void UART_SendBinaryFloat(float value) {
-    // 1. Mapear el float a los 4 bytes del paquete
-    dsp_output.f = value;
-    memcpy(tx_packet.data, dsp_output.bytes, 4);
-
-    // 2. Transmitir el paquete completo (7 bytes) por DMA
-    // Esto no bloquea el procesamiento del siguiente dato del filtro
-    HAL_UART_Transmit_DMA(&huart2, (uint8_t*)&tx_packet, sizeof(TelemetryPacket));
-}
-
-
-/* USER CODE END 0 */
-
 /**
   * @brief  The application entry point.
   * @retval int
@@ -354,8 +331,8 @@ int main(void)
 	{
 		adc_ready = 0;
 
-		uint16_t x = (uint16_t)adc_raw_value * (4095/255);
-		float y_out = DigitalFilter((float)x, &cb_x, &cb_y, a_coefs, b_coefs);
+		float x = (float)adc_raw_value;
+		float y_out = DigitalFilter(x, &cb_x, &cb_y, a_coefs, b_coefs);
 
 		int32_t dac_val = (int32_t)y_out;
 		if(dac_val > 4095) dac_val = 4095;
@@ -369,7 +346,7 @@ int main(void)
 		}
 	}
   }
-  /* USER CODE END WHILE */
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
 
@@ -445,7 +422,7 @@ static void MX_ADC1_Init(void)
   */
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
-  hadc1.Init.Resolution = ADC_RESOLUTION_8B;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
@@ -656,7 +633,7 @@ static void MX_GPIO_Init(void)
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
     if(hadc->Instance == ADC1) {
-        adc_raw_value = (uint8_t)HAL_ADC_GetValue(hadc); // Correcto: asignación directa
+        adc_raw_value = (uint16_t)HAL_ADC_GetValue(hadc); // Correcto: asignación directa
         adc_ready = 1;
     }
 }
