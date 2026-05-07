@@ -33,6 +33,19 @@ typedef struct {
     uint16_t size;
     uint16_t head;
 } CircularBuffer;
+
+typedef union {
+    float f;
+    uint32_t u32;
+    uint8_t bytes[4];
+} BinaryData;
+
+// Estructura de paquete para evitar desincronización en la PC
+typedef struct {
+    uint8_t header[2]; // Ejemplo: 0xAA, 0xBB
+    uint8_t data[4];
+    uint8_t footer;    // Ejemplo: 0xFF
+} TelemetryPacket;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -41,14 +54,15 @@ typedef struct {
 #define DSP_BUFFER_SIZE 100
 
 // Protocolo de comunicaciones USART
-#define CMD_START 			0x00
-#define CMD_VECTOR_SEL		0x01
-#define CMD_INDEX			0x02
-#define CMD_DATA_0			0x03
-#define CMD_DATA_1			0x04
-#define CMD_DATA_2			0x05
-#define CMD_DATA_3			0x06
-#define CMD_STOP			0x07
+#define CMD_START 			'a'
+#define CMD_VECTOR_SEL		'b'
+#define CMD_INDEX			'c'
+#define CMD_DATA_0			'd'
+#define CMD_DATA_1			'e'
+#define CMD_DATA_2			'f'
+#define CMD_DATA_3			'g'
+#define CMD_STOP			'h'
+#define CMD_INSPECT_COEFS    'i'  // Nuevo comando para reporte ASCII
 
 #define VECTOR_SEL_A		0x00
 #define VECTOR_SEL_B		0x01
@@ -86,8 +100,8 @@ CircularBuffer cb_x = {x_data, 3, 0};
 CircularBuffer cb_y = {y_data, 3, 0};
 
 // Coeficientes
-float a_coefs[3] = {10.0f, 20.0f, 10.0f};
-float b_coefs[3] = {1.0f, -0.5f, 0.2f}; // Ajustados para estabilidad (ejemplo)
+float a_coefs[3] = {1.0f-0.9f};
+float b_coefs[3] = {1.0f, -0.9f}; // Ajustados para estabilidad (ejemplo)
 
 // Buffer para entrada de UART
 uint8_t RX_buffer[UART2_BUFFER_SIZE];
@@ -101,6 +115,8 @@ uint8_t rx_byte_3 = 0;
 uint8_t rx_vector_sel = 0;
 uint8_t rx_index = 0;
 
+TelemetryPacket tx_packet = {{0xAA, 0xBB}, {0}, 0xFF};
+BinaryData dsp_output;
 
 /* USER CODE END PV */
 
@@ -117,7 +133,7 @@ void SetSamplingRate(uint16_t frequency);
 float DigitalFilter(float x_n, CircularBuffer *cX, CircularBuffer *cY, float a[], float b[]);
 void ProcessInputUART(float* a, float* b, uint8_t input[]);
 float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0);
-void ConvertFloatTo4Bytes(float f, uint8_t* out_array);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -220,12 +236,38 @@ void ProcessInputUART(float* a, float* b, uint8_t input[])
 		break;
 
 
-
     	// 4. Si se envía el comando STOP, almacenar el valor float en los vectores a y b
     	case CMD_STOP:
 			float f = Convert4BytesToFloat(rx_byte_3, rx_byte_2, rx_byte_1, rx_byte_0);
-			if(rx_vector_sel == VECTOR_SEL_A) a[rx_index] = f;
-			else b[rx_index] = f;
+			if		(rx_vector_sel == VECTOR_SEL_A) a[rx_index] = f;
+			else if (rx_vector_sel == VECTOR_SEL_B) b[rx_index] = f;
+			HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+		break;
+
+    	case(CMD_INSPECT_COEFS):
+			// 2. ¡CRÍTICO! Cancelamos la transmisión DMA que esté ocurriendo AHORA MISMO
+			HAL_UART_AbortTransmit(&huart2);
+
+			// 3. Ahora sí, el puerto UART está libre para enviar texto
+			char buffer[64];
+			sprintf(buffer, "\r\n--- Coeficientes Actuales ---\r\n");
+			HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+
+			// Imprimir Vector A
+			for(int i = 0; i < 3; i++) {
+				sprintf(buffer, "a[%d]: %.6f\r\n", i, a[i]);
+				HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+			}
+
+			// Imprimir Vector B
+			for(int i = 0; i < 3; i++) {
+				sprintf(buffer, "b[%d]: %.6f\r\n", i, b[i]);
+				HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+			}
+
+			sprintf(buffer, "-----------------------------\r\n");
+			HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+
 		break;
 
     }
@@ -240,11 +282,15 @@ float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0)
 	return f;
 }
 
-// Conversión de Float en 4 Bytes
-void ConvertFloatTo4Bytes(float f, uint8_t* out_array)
-{
-    // Copiamos los 4 bytes del float directamente al destino
-    memcpy(out_array, &f, sizeof(float));
+// Enviar float a través de USART
+void UART_SendBinaryFloat(float value) {
+    // 1. Mapear el float a los 4 bytes del paquete
+    dsp_output.f = value;
+    memcpy(tx_packet.data, dsp_output.bytes, 4);
+
+    // 2. Transmitir el paquete completo (7 bytes) por DMA
+    // Esto no bloquea el procesamiento del siguiente dato del filtro
+    HAL_UART_Transmit_DMA(&huart2, (uint8_t*)&tx_packet, sizeof(TelemetryPacket));
 }
 
 
@@ -284,7 +330,6 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_DAC_Init();
-
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);    // Disparador de frecuencia de muestreo
   HAL_ADC_Start_IT(&hadc1);      // Iniciar ADC por interrupción
@@ -294,38 +339,36 @@ int main(void)
   HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
 
   SetSamplingRate(10000);        // 10 kHz
+  HAL_UART_Receive_IT(&huart2, RX_buffer, 2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-    while (1)
-    {
-        if(adc_ready)
-        {
-            adc_ready = 0;
+  while (1)
+  {
+      if(adc_ready)
+      {
+          adc_ready = 0;
 
-            // 1. Procesamiento Digital (Filtro)
-            // Pasamos las estructuras de control que contienen los índices móviles
-            float y_out = DigitalFilter((float)adc_raw_value, &cb_x, &cb_y, a_coefs, b_coefs);
+          // Mapear entrada a 12 bits
+          uint16_t x = (uint16_t)adc_raw_value * (4095/255);
 
-            // 2. Salida al DAC (Importante para escuchar/ver el filtro)
-            // El DAC de 8 bits espera valores de 0 a 255.
-            // Aplicamos un "clamp" para evitar desbordamientos.
-            int32_t dac_val = (int32_t)y_out;
-            if(dac_val > 255) dac_val = 255;
-            if(dac_val < 0)   dac_val = 0;
+          // Procesar filtro
+          float y_out = DigitalFilter((float)x, &cb_x, &cb_y, a_coefs, b_coefs);
 
-            HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_8B_R, (uint32_t)dac_val);
+          // --- CORRECCIÓN PARA 12 BITS ---
+          // 1. Aumentamos el límite de saturación a 4095
+          int32_t dac_val = (int32_t)y_out;
+          if(dac_val > 4095) dac_val = 4095;
+          if(dac_val < 0)    dac_val = 0;
 
-            // 3. Reporte por UART
-            // Nota: y_out es float, usamos %f. adc_raw_value es uint8, usamos %u.
-            char msg[64];
-            int len = sprintf(msg, "ADC: %u | Filtered: %.2f\r\n", adc_raw_value, y_out);
+          // 2. Cambiamos DAC_ALIGN_8B_R por DAC_ALIGN_12B_R
+          HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)dac_val);
 
-            // Transmitir por DMA para no bloquear el CPU
-            HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, len);
-        }
-    }
+          // Enviar telemetría binaria
+          UART_SendBinaryFloat(y_out);
+      }
+  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -620,9 +663,15 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
     if (huart->Instance == USART2) {
-        // Aquí llamarías a tu función de procesamiento
+        // 1. Procesar los 2 bytes recibidos
         ProcessInputUART(a_coefs, b_coefs, RX_buffer);
-        HAL_UART_Receive_IT(&huart2, RX_buffer, 8); // Ajusta el tamaño al protocolo
+
+        // 2. ENVIAR ACK: Devolvemos el comando recibido como confirmación
+        uint8_t ack = RX_buffer[1];
+        HAL_UART_Transmit(&huart2, &ack, 1, 10);
+
+        // 3. RE-ARMAR la recepción para los PRÓXIMOS 2 BYTES únicamente
+        HAL_UART_Receive_IT(&huart2, RX_buffer, 2);
     }
 }
 
