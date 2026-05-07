@@ -63,6 +63,9 @@ typedef struct {
 #define CMD_DATA_3			'g'
 #define CMD_STOP			'h'
 #define CMD_INSPECT_COEFS    'i'  // Nuevo comando para reporte ASCII
+#define CMD_FREQ_LOW  'j'
+#define CMD_FREQ_HIGH 'k'
+#define CMD_RESUME    'r'
 
 #define VECTOR_SEL_A		0x00
 #define VECTOR_SEL_B		0x01
@@ -118,6 +121,9 @@ uint8_t rx_index = 0;
 TelemetryPacket tx_packet = {{0xAA, 0xBB}, {0}, 0xFF};
 BinaryData dsp_output;
 
+volatile uint8_t config_mode = 0;
+
+uint16_t target_frequency = 10000; // Valor por defecto
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -193,85 +199,83 @@ float DigitalFilter(float x_n, CircularBuffer *cX, CircularBuffer *cY, float a[]
 // Comandos UART
 void ProcessInputUART(float* a, float* b, uint8_t input[])
 {
-	// Input es el buffer de USART2
+    uint8_t data = input[0];
+    uint8_t command = input[1];
 
-    // Realizar acción dependiendo del byte ANTERIOR al último byte recibido
-    switch(input[1])
+    switch(command)
     {
-    	// 1. Iniciar transmisión USART de un float
-    	case(CMD_START):
-    		// Reiniciar variables
-			rx_byte_0 = 0;
-			rx_byte_1 = 0;
-			rx_byte_2 = 0;
-			rx_byte_3 = 0;
+        case(CMD_START):
+            config_mode = 1;
+            HAL_UART_AbortTransmit(&huart2); // Detener telemetría de inmediato
+            rx_byte_0 = 0; rx_byte_1 = 0; rx_byte_2 = 0; rx_byte_3 = 0;
+            break;
+
+        case(CMD_VECTOR_SEL): rx_vector_sel = data; break;
+        case(CMD_INDEX):      rx_index = data;      break;
+
+        case(CMD_DATA_0):     rx_byte_0 = data;     break;
+        case(CMD_DATA_1):     rx_byte_1 = data;     break;
+        case(CMD_DATA_2):     rx_byte_2 = data;     break;
+        case(CMD_DATA_3):     rx_byte_3 = data;     break;
+
+        case(CMD_STOP):
+            {
+                BinaryData temp;
+                temp.bytes[0] = rx_byte_0; // Little Endian (LSB primero)
+                temp.bytes[1] = rx_byte_1;
+                temp.bytes[2] = rx_byte_2;
+                temp.bytes[3] = rx_byte_3;
+
+                if (rx_vector_sel == VECTOR_SEL_A) a[rx_index] = temp.f;
+                else if (rx_vector_sel == VECTOR_SEL_B) b[rx_index] = temp.f;
+
+                HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+            }
+            break;
+
+        case(CMD_INSPECT_COEFS):
+            config_mode = 1;
+            HAL_UART_AbortTransmit(&huart2);
+
+            char msg[64];
+            sprintf(msg, "\r\n--- Coeficientes Actuales ---\r\n");
+            HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+
+            for(int i=0; i<3; i++) {
+                sprintf(msg, "a[%d]: %.6f\r\n", i, a[i]);
+                HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+            }
+            for(int i=0; i<3; i++) {
+                sprintf(msg, "b[%d]: %.6f\r\n", i, b[i]);
+                HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+            }
+            sprintf(msg, "-----------------------------\r\n");
+            HAL_UART_Transmit(&huart2, (uint8_t*)msg, strlen(msg), 100);
+
+            //config_mode = 0;
 		break;
 
-    	// 2. Enviar el vector seleccionado
-    	case(CMD_VECTOR_SEL):
-    		// Guardar selector
-    		rx_vector_sel = input[0];
-    	break;
-
-    	// 3. Enviar el índice seleccionado
-		case(CMD_INDEX):
-			rx_index = input[0];
+        case CMD_FREQ_LOW:
+			// Guardamos los 8 bits menos significativos
+			target_frequency = (target_frequency & 0xFF00) | data;
 		break;
 
-		// 4. Recibir datos
-    	case(CMD_DATA_0):
-			rx_byte_0 = input[0];
-		break;
+		case CMD_FREQ_HIGH:
+			// Guardamos los 8 bits más significativos y actualizamos el Timer
+			target_frequency = (target_frequency & 0x00FF) | (data << 8);
 
-    	case(CMD_DATA_1):
-			rx_byte_1 = input[0];
-		break;
-
-    	case(CMD_DATA_2):
-			rx_byte_2 = input[0];
-		break;
-
-    	case(CMD_DATA_3):
-			rx_byte_3 = input[0];
-		break;
-
-
-    	// 4. Si se envía el comando STOP, almacenar el valor float en los vectores a y b
-    	case CMD_STOP:
-			float f = Convert4BytesToFloat(rx_byte_3, rx_byte_2, rx_byte_1, rx_byte_0);
-			if		(rx_vector_sel == VECTOR_SEL_A) a[rx_index] = f;
-			else if (rx_vector_sel == VECTOR_SEL_B) b[rx_index] = f;
-			HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-		break;
-
-    	case(CMD_INSPECT_COEFS):
-			// 2. ¡CRÍTICO! Cancelamos la transmisión DMA que esté ocurriendo AHORA MISMO
-			HAL_UART_AbortTransmit(&huart2);
-
-			// 3. Ahora sí, el puerto UART está libre para enviar texto
-			char buffer[64];
-			sprintf(buffer, "\r\n--- Coeficientes Actuales ---\r\n");
-			HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
-
-			// Imprimir Vector A
-			for(int i = 0; i < 3; i++) {
-				sprintf(buffer, "a[%d]: %.6f\r\n", i, a[i]);
-				HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
+			// Evitamos frecuencias de 0 para no romper el cálculo del Timer
+			if (target_frequency > 0) {
+				SetSamplingRate(target_frequency);
 			}
-
-			// Imprimir Vector B
-			for(int i = 0; i < 3; i++) {
-				sprintf(buffer, "b[%d]: %.6f\r\n", i, b[i]);
-				HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
-			}
-
-			sprintf(buffer, "-----------------------------\r\n");
-			HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
-
 		break;
 
+		case CMD_RESUME:
+			config_mode = 0; // Salir del modo configuración y reanudar DMA
+		break;
     }
 }
+/* USER CODE END 0 */
 
 // Conversión de 4 bytes a float
 float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0)
@@ -338,7 +342,7 @@ int main(void)
   // Actualizaremos el valor manualmente después de filtrar.
   HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
 
-  SetSamplingRate(10000);        // 10 kHz
+  SetSamplingRate(target_frequency);        // 10 kHz
   HAL_UART_Receive_IT(&huart2, RX_buffer, 2);
   /* USER CODE END 2 */
 
@@ -346,30 +350,26 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      if(adc_ready)
-      {
-          adc_ready = 0;
+	if(adc_ready)
+	{
+		adc_ready = 0;
 
-          // Mapear entrada a 12 bits
-          uint16_t x = (uint16_t)adc_raw_value * (4095/255);
+		uint16_t x = (uint16_t)adc_raw_value * (4095/255);
+		float y_out = DigitalFilter((float)x, &cb_x, &cb_y, a_coefs, b_coefs);
 
-          // Procesar filtro
-          float y_out = DigitalFilter((float)x, &cb_x, &cb_y, a_coefs, b_coefs);
+		int32_t dac_val = (int32_t)y_out;
+		if(dac_val > 4095) dac_val = 4095;
+		if(dac_val < 0)    dac_val = 0;
 
-          // --- CORRECCIÓN PARA 12 BITS ---
-          // 1. Aumentamos el límite de saturación a 4095
-          int32_t dac_val = (int32_t)y_out;
-          if(dac_val > 4095) dac_val = 4095;
-          if(dac_val < 0)    dac_val = 0;
+		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)dac_val);
 
-          // 2. Cambiamos DAC_ALIGN_8B_R por DAC_ALIGN_12B_R
-          HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, (uint32_t)dac_val);
-
-          // Enviar telemetría binaria
-          UART_SendBinaryFloat(y_out);
-      }
+		// SOLO ENVIAR SI NO ESTAMOS EN MODO CONFIGURACIÓN
+		if (config_mode == 0) {
+			UART_SendBinaryFloat(y_out);
+		}
+	}
   }
-    /* USER CODE END WHILE */
+  /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
 
