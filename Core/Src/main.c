@@ -28,7 +28,11 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+    float *buffer;
+    uint16_t size;
+    uint16_t head;
+} CircularBuffer;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -36,11 +40,21 @@
 #define UART2_BUFFER_SIZE 100
 #define DSP_BUFFER_SIZE 100
 
-// Definiciones de comandos como caracteres simples
-#define CMD_SEND_BUFFER 	's'
-#define CMD_RESET       	'r'
-#define CMD_NUMERATOR	 	'n'
-#define CMD_DENOMINATOR     'd'
+// Protocolo de comunicaciones USART
+#define CMD_START 			0x00
+#define CMD_VECTOR_SEL		0x01
+#define CMD_INDEX			0x02
+#define CMD_DATA_0			0x03
+#define CMD_DATA_1			0x04
+#define CMD_DATA_2			0x05
+#define CMD_DATA_3			0x06
+#define CMD_STOP			0x07
+
+#define VECTOR_SEL_A		0x00
+#define VECTOR_SEL_B		0x01
+
+#define FCLK1				1000000
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,21 +74,34 @@ UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
-
 volatile uint8_t adc_ready = 0;
-uint8_t* adc_value;
-uint32_t dac_value = 0;
+volatile uint8_t adc_raw_value = 0; // Cambiado de puntero a variable real
 
-// Historiales (Buffers)
-int16_t x_buffer[3] = {0};
-int16_t y_buffer[3] = {0};
+// Buffers físicos
+float x_data[3] = {0};
+float y_data[3] = {0};
 
-// Coeficientes (Ejemplo: Filtro pasa-bajas simple)
-int16_t a_coefs[3] = {10, 20, 10}; // Numerador
-int16_t b_coefs[3] = {1, -5, 2};   // Denominador
+// Estructuras de control
+CircularBuffer cb_x = {x_data, 3, 0};
+CircularBuffer cb_y = {y_data, 3, 0};
+
+// Coeficientes
+float a_coefs[3] = {10.0f, 20.0f, 10.0f};
+float b_coefs[3] = {1.0f, -0.5f, 0.2f}; // Ajustados para estabilidad (ejemplo)
 
 // Buffer para entrada de UART
-uint8_t uart_buffer[UART2_BUFFER_SIZE];
+uint8_t RX_buffer[UART2_BUFFER_SIZE];
+
+// Variables para bytes para conversión de byte a float
+uint8_t rx_byte_0 = 0;
+uint8_t rx_byte_1 = 0;
+uint8_t rx_byte_2 = 0;
+uint8_t rx_byte_3 = 0;
+
+uint8_t rx_vector_sel = 0;
+uint8_t rx_index = 0;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -86,114 +113,141 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_DAC_Init(void);
 /* USER CODE BEGIN PFP */
-void InsertAtBeginning(int16_t arr[], uint16_t val, uint16_t size);
-void InsertAtBeginningFast(int16_t arr[], uint16_t val, uint16_t size);
 void SetSamplingRate(uint16_t frequency);
-int16_t DigitalFilter(int16_t x_h[], int16_t y_h[], int16_t a[], int16_t b[]);
-void ProcessInputUART(int16_t* a[], int16_t* b[], char* input);
+float DigitalFilter(float x_n, CircularBuffer *cX, CircularBuffer *cY, float a[], float b[]);
+void ProcessInputUART(float* a, float* b, uint8_t input[]);
+float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0);
+void ConvertFloatTo4Bytes(float f, uint8_t* out_array);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Insertar elemento al principio de un arreglo
-void InsertAtBeginning(int16_t arr[], uint16_t val, uint16_t size)
-{
-    // Desplazar elementos hacia la derecha (El último valor se pierde).
-    // Iteramos de ATRÁS hacia ADELANTE para no sobrescribir los datos.
-    for (uint16_t i = size - 1; i > 0; i--)
-    {
-        arr[i] = arr[i - 1];
-    }
-
-    // Insertar el valor más reciente al inicio del arreglo
-    arr[0] = val;
+// Función para insertar: Sobrescribe el más viejo y avanza el head
+void CB_Push(CircularBuffer *cb, float value) {
+    cb->buffer[cb->head] = value;
+    cb->head = (cb->head + 1) % cb->size;
 }
 
-// Insertar elemento al inicio de un arreglo, rápidamente
-void InsertAtBeginningFast(int16_t arr[], uint16_t val, uint16_t size)
-{
-    // Mueve el bloque de memoria un espacio a la derecha
-    // (Destino, Origen, Cantidad de bytes a mover)
-    memmove(&arr[1], &arr[0], (size - 1) * sizeof(uint16_t));
-
-    arr[0] = val;
+// Función para leer: lookback 0 es el más reciente, 1 el anterior...
+float CB_Read(CircularBuffer *cb, uint16_t lookback) {
+    // Si head es 2, el más reciente (lookback 0) está en index 1
+    int16_t index = (int16_t)cb->head - 1 - (int16_t)lookback;
+    while (index < 0) index += cb->size;
+    return cb->buffer[index];
 }
 
+// Cambiar la frecuencia de meuestreo
 void SetSamplingRate(uint16_t frequency)
 {
-    // 1. Protección de seguridad: Evitar una división por cero si envían 0 Hz
-    if (frequency == 0) {
-        return;
-    }
+    if (frequency == 0) return;
 
-    // 2. Calcular el nuevo periodo (ARR)
-    // Sabemos que el Timer cuenta a 1 MHz gracias al Prescaler (90-1)
-    uint32_t new_period = (1000000 / frequency) - 1;
+    // Usar FCLK1 que es la que definiste arriba
+    uint32_t new_period = (FCLK1 / frequency) - 1;
 
-    // 3. Escribir el nuevo valor en el registro de Auto-Recarga (ARR) del Timer 2
     __HAL_TIM_SET_AUTORELOAD(&htim2, new_period);
-
-    // 4. Reiniciar el contador a 0 para que el cambio se aplique inmediatamente
-    // y no tengamos que esperar a que termine un ciclo viejo muy largo
     __HAL_TIM_SET_COUNTER(&htim2, 0);
 }
 
-int16_t DigitalFilter(int16_t x_h[], int16_t y_h[], int16_t a[], int16_t b[])
-{
-   /* FILTRO DIGITAL
-    * - a: Coeficientes de numerador de función de transferencia
-    * - b: Coeficientes de denominador de función de transferencia
-    * - x_h: Historial de valores de la entrada
-    * - y_h: Historial de valores de la salida
-    * - N: Cantidad de coeficientes del numerador
-    * - M: Cantidad de coeficientes del denominador
-    */
+// Filtro Digital usando la lógica de índices móviles
+float DigitalFilter(float x_n, CircularBuffer *cX, CircularBuffer *cY, float a[], float b[]) {
+    float y_acc = 0;
 
-    // Acumulador de 32 bits (para evitar overflow en las sumas de multiplicaciones)
-    uint16_t y_acc = 0;
+    // 1. Guardamos la entrada actual en el buffer circular
+    CB_Push(cX, x_n);
 
-    // Valores pasados/presentes de la entrada (Feedforward / Numerador)
-    for(uint8_t i = 0; i < sizeof(a);  i++) {
-        y_acc += (uint16_t)a[i] * x_h[i];
+    // 2. Feedforward: y[n] = a0*x[n] + a1*x[n-1] + ...
+    for(uint16_t i = 0; i < cX->size; i++) {
+        y_acc += a[i] * CB_Read(cX, i);
     }
 
-    // Valores pasados de la salida (Feedback / Denominador)
-    // Nota: por convención este término se resta
-    for(uint8_t j = 0; j < sizeof(b);  j++) {
-        y_acc -= (uint16_t)b[j] * y_h[j];
+    // 3. Feedback: - (b1*y[n-1] + b2*y[n-2]...)
+    // Nota: Empezamos en j=1 porque b[0] suele ser 1
+    for(uint16_t j = 1; j < cY->size; j++) {
+        y_acc -= b[j] * CB_Read(cY, j - 1);
     }
 
-    return (int16_t)y_acc;
+    // 4. Guardamos la salida calculada para el siguiente ciclo
+    CB_Push(cY, y_acc);
+
+    return y_acc;
 }
+
 
 // Comandos UART
-void ProcessInputUART(int16_t* a[], int16_t* b[], char* input)
+void ProcessInputUART(float* a, float* b, uint8_t input[])
 {
-    // Usamos el primer carácter del puntero para el switch
-    switch(input[0])
+	// Input es el buffer de USART2
+
+    // Realizar acción dependiendo del byte ANTERIOR al último byte recibido
+    switch(input[1])
     {
-        case CMD_SEND_BUFFER:
-            HAL_UART_Transmit(&huart2, (uint8_t*)uart_buffer, sizeof(uart_buffer), 100);
-            break;
+    	// 1. Iniciar transmisión USART de un float
+    	case(CMD_START):
+    		// Reiniciar variables
+			rx_byte_0 = 0;
+			rx_byte_1 = 0;
+			rx_byte_2 = 0;
+			rx_byte_3 = 0;
+		break;
 
-        case CMD_RESET:
-            // Lógica de reset
-            break;
+    	// 2. Enviar el vector seleccionado
+    	case(CMD_VECTOR_SEL):
+    		// Guardar selector
+    		rx_vector_sel = input[0];
+    	break;
 
-        case CMD_NUMERATOR:
-        	// Modificar los coeficientes de A
-        	break;
+    	// 3. Enviar el índice seleccionado
+		case(CMD_INDEX):
+			rx_index = input[0];
+		break;
 
-        case CMD_DENOMINATOR:
-        	//
-        	break;
+		// 4. Recibir datos
+    	case(CMD_DATA_0):
+			rx_byte_0 = input[0];
+		break;
 
-        default:
-            // Comando no reconocido
-            break;
+    	case(CMD_DATA_1):
+			rx_byte_1 = input[0];
+		break;
+
+    	case(CMD_DATA_2):
+			rx_byte_2 = input[0];
+		break;
+
+    	case(CMD_DATA_3):
+			rx_byte_3 = input[0];
+		break;
+
+
+
+    	// 4. Si se envía el comando STOP, almacenar el valor float en los vectores a y b
+    	case CMD_STOP:
+			float f = Convert4BytesToFloat(rx_byte_3, rx_byte_2, rx_byte_1, rx_byte_0);
+			if(rx_vector_sel == VECTOR_SEL_A) a[rx_index] = f;
+			else b[rx_index] = f;
+		break;
+
     }
 }
+
+// Conversión de 4 bytes a float
+float Convert4BytesToFloat(uint8_t b3, uint8_t b2, uint8_t b1, uint8_t b0)
+{
+	float f;
+	uint8_t b[] = {b3, b2, b1, b0};
+	memcpy(&f, &b, sizeof(f));
+	return f;
+}
+
+// Conversión de Float en 4 Bytes
+void ConvertFloatTo4Bytes(float f, uint8_t* out_array)
+{
+    // Copiamos los 4 bytes del float directamente al destino
+    memcpy(out_array, &f, sizeof(float));
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -230,34 +284,48 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_DAC_Init();
+
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start(&htim2); 	// Iniciar Timer3 (Trigger para ADC)
-  HAL_ADC_Start_IT(&hadc1); 	// Iniciar conversión de ADC
-  HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_1, (uint32_t*)adc_value, sizeof(uint8_t), DAC_ALIGN_8B_R);
-  SetSamplingRate(10000);
+  HAL_TIM_Base_Start(&htim2);    // Disparador de frecuencia de muestreo
+  HAL_ADC_Start_IT(&hadc1);      // Iniciar ADC por interrupción
+
+  // Iniciamos el DAC de forma normal (sin DMA).
+  // Actualizaremos el valor manualmente después de filtrar.
+  HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
+
+  SetSamplingRate(10000);        // 10 kHz
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-      // --- PROCESAMIENTO DSP (Sincronizado con la nueva frecuencia) ---
-      if(adc_ready)
-      {
-          adc_ready = 0;
+    while (1)
+    {
+        if(adc_ready)
+        {
+            adc_ready = 0;
 
-          // 1. Procesamiento (Filtro)
-          InsertAtBeginning(x_buffer, *adc_value, 3);
-          int16_t y_out = DigitalFilter(x_buffer, y_buffer, a_coefs, b_coefs);
-          InsertAtBeginning(y_buffer, y_out, 3);
+            // 1. Procesamiento Digital (Filtro)
+            // Pasamos las estructuras de control que contienen los índices móviles
+            float y_out = DigitalFilter((float)adc_raw_value, &cb_x, &cb_y, a_coefs, b_coefs);
 
-          // 3. Reporte por UART
-          char msg[40];
-          // Imprimimos también la frecuencia actual para verla en la terminal
-          int len = sprintf(msg, "Freq: %uHz | ADC: %u\r\n", y_out, *adc_value);
-          HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, len);
-      }
-  }
+            // 2. Salida al DAC (Importante para escuchar/ver el filtro)
+            // El DAC de 8 bits espera valores de 0 a 255.
+            // Aplicamos un "clamp" para evitar desbordamientos.
+            int32_t dac_val = (int32_t)y_out;
+            if(dac_val > 255) dac_val = 255;
+            if(dac_val < 0)   dac_val = 0;
+
+            HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_8B_R, (uint32_t)dac_val);
+
+            // 3. Reporte por UART
+            // Nota: y_out es float, usamos %f. adc_raw_value es uint8, usamos %u.
+            char msg[64];
+            int len = sprintf(msg, "ADC: %u | Filtered: %.2f\r\n", adc_raw_value, y_out);
+
+            // Transmitir por DMA para no bloquear el CPU
+            HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, len);
+        }
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -543,18 +611,18 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 // INTERRUPCIONES
 
-// Interrupción por conversión completa de ADC
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
-	// Leer y actualizar resultado de ADC
-	*adc_value = HAL_ADC_GetValue(&hadc1);
-	adc_ready = 1;
+    if(hadc->Instance == ADC1) {
+        adc_raw_value = (uint8_t)HAL_ADC_GetValue(hadc); // Correcto: asignación directa
+        adc_ready = 1;
+    }
 }
 
-// Interrupción por recepción completa
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-    if (huart->Instance == USART2)
-    {
-        HAL_UART_Receive_IT(&huart2, uart_buffer, UART2_BUFFER_SIZE);
+    if (huart->Instance == USART2) {
+        // Aquí llamarías a tu función de procesamiento
+        ProcessInputUART(a_coefs, b_coefs, RX_buffer);
+        HAL_UART_Receive_IT(&huart2, RX_buffer, 8); // Ajusta el tamaño al protocolo
     }
 }
 

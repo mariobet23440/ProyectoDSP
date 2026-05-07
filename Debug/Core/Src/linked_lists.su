@@ -1,0 +1,2 @@
+../Core/Src/linked_lists.c:14:14:createNode	24	static
+../Core/Src/linked_lists.c:28:6:insertAtBeginning	24	static

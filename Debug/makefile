@@ -61,7 +61,7 @@ main-build: ProyectoDSP.elf secondary-outputs
 
 # Tool invocations
 ProyectoDSP.elf ProyectoDSP.map: $(OBJS) $(USER_OBJS) C:\Procesamiento\ de\ Señales\Proyecto\ProyectoDSP\STM32F446RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "ProyectoDSP.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Procesamiento de Señales\Proyecto\ProyectoDSP\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="ProyectoDSP.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	arm-none-eabi-gcc -o "ProyectoDSP.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Procesamiento de Señales\Proyecto\ProyectoDSP\STM32F446RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="ProyectoDSP.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
