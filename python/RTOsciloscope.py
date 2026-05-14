@@ -6,7 +6,7 @@ import matplotlib.animation as animation
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-SERIAL_PORT = 'COM11'  # Ajusta según tu PC
+SERIAL_PORT = 'COM10'  # Ajusta según tu PC
 BAUD_RATE = 115200    # Si es muy lento para 10kHz, sube a 921600 en STM32 y aquí
 MAX_POINTS = 200      # Cuántos puntos mostrar en pantalla a la vez
 PACKET_SIZE = 7       # [0xAA, 0xBB, float(4), 0xFF]
